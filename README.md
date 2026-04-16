@@ -1,1 +1,3 @@
 # sorundafronten
+
+borde hetat JÄRREBOMB
