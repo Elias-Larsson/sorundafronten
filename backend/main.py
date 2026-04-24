@@ -1,10 +1,19 @@
 import csv
 import math
+import random
+
 
 
 def load_bases(filename):
     bases = []
 
+    capability_options = [
+        ["aircraft"],
+        ["drone"],
+        ["aircraft", "drone"],
+        ["missile"]
+    ]
+    
     with open(filename, newline='') as csvfile:
         reader = csv.DictReader(csvfile)
 
@@ -15,7 +24,9 @@ def load_bases(filename):
                     "x": float(row["x_km"]),
                     "y": float(row["y_km"]),
                     "capacity": 2,
-                    "speed": 1.0
+                    "speed": 1.0,
+                    "range": 500,
+                    "capabilities": random.choice(capability_options)
                 }
 
                 bases.append(base)
@@ -25,9 +36,9 @@ def load_bases(filename):
 
 def create_threats():
     threats = [
-        {"id": 1, "x": 500, "y": 200, "priority": 10},
-        {"id": 2, "x": 100, "y": 800, "priority": 5},
-        {"id": 3, "x": 300, "y": 400, "priority": 8},
+        {"id": 1, "x": 500, "y": 200, "type": "missile", "priority": 10},
+        {"id": 2, "x": 100, "y": 800, "type": "drone", "priority": 5},
+        {"id": 3, "x": 300, "y": 400, "type": "aircraft", "priority": 8},
     ]
     return threats
 
@@ -38,11 +49,20 @@ def distance(a, b):
 def cost(base, threat):
     d = distance(base, threat)
 
-    # viktning
+    # kan inte nå
+    if d > base["range"]:
+        return float("inf")
+
     distance_weight = 1.0
     priority_weight = 100.0
 
-    return (d * distance_weight) - (threat["priority"] * priority_weight)
+    score = (d * distance_weight) - (threat["priority"] * priority_weight)
+
+    # penalty om dålig matchning
+    if threat["type"] not in base["capabilities"]:
+        score += 1000
+
+    return score
 
 
 def assign_bases_to_threats(bases, threats):
@@ -71,7 +91,7 @@ def assign_bases_to_threats(bases, threats):
 
 
 def main():
-    bases = load_bases("../Boreal_passage_coordinates.csv")
+    bases = load_bases("Boreal_passage_coordinates.csv")
     threats = create_threats()
 
     threats = sorted(threats, key=lambda t: t["priority"], reverse=True)
