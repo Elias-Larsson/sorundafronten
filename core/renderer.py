@@ -229,7 +229,7 @@ class Renderer:
             f"Time: {simulation.time_elapsed:.1f}s",
             "",
             f"AD Ammo: {simulation.resources.air_defense_ammo}",
-            f"Fuel: {simulation.resources.fuel_available}/{simulation.resources.fuel_total}",
+            f"Fuel: {simulation.resources.fuel}/{simulation.resources.fuel_max}",
             f"Fighters: {simulation.resources.fighters_available}/{simulation.resources.fighters_total}",            
             f"Drones Ready: {simulation.resources.drones_ready}",
             f"AI Source: {simulation.ai_provider_status}",

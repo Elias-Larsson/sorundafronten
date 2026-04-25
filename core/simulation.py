@@ -132,6 +132,7 @@ class Simulation:
             self.turn_analyses = {}
             self.latest_decisions = []
             self._sync_selected_target()
+            self.resources.add_fuel(self.resources.fuel_resupply_per_turn)
             self._log(f"Turn {completed_turn} resolved. Queue threats for turn {self.turn_number}.")
 
     def spawn_manual(self, threat_type: ThreatType) -> None:
@@ -507,7 +508,7 @@ class Simulation:
                         f"Decision: Fighter scrambled for T{threat.threat_id} from {decision.launch_from}"
                         f" (score={decision.priority_score:.2f})."
                     )
-                elif self.resources.fuel_available <= 0:
+                elif self.resources.fuel <= 0:
                     self._log("Decision blocked: No fuel available for fighter launch.")
 
             elif decision.action == DecisionAction.DEPLOY_DRONE:
@@ -596,13 +597,11 @@ class Simulation:
             home = self._asset_by_id(interceptor.source_id)
             if home is None or not home.is_alive():
                 interceptor.alive = False
-                self.resources.cancel_fighter_fuel_reservation()
                 self.resources.recover_fighter()
                 return
 
             if interceptor.update_toward(home.x, home.y, dt):
                 interceptor.alive = False
-                self.resources.fighter_returned()
                 self.resources.recover_fighter()
                 self._log(f"Fighter returned to {home.asset_id}.")
             return
