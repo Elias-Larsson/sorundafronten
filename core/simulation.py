@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 from collections import deque
+from dataclasses import dataclass
+from enum import Enum
 import json
 import random
 from pathlib import Path
+import threading
 from typing import Deque
 
 from ai import ThreatAnalysis, ThreatAnalyzer
 from core.decision_engine import Decision, DecisionAction, DecisionEngine
 from core.map_loader import MapData, MapProjector, load_map_data
 from models import Asset, Interceptor, InterceptorType, ResourceState, Threat, ThreatType
+
+
+class TurnPhase(str, Enum):
+    PLAYER_PLANNING = "player_planning"
+    AI_THINKING = "ai_thinking"
+    RESOLVING = "resolving"
+
+
+@dataclass(frozen=True)
+class PlannedThreat:
+    threat_type: ThreatType
+    target_asset_id: str
 
 
 class Simulation:
@@ -55,12 +70,22 @@ class Simulation:
         self.ai_provider_status = self.analyzer.provider_status
         self.decision_engine = DecisionEngine()
 
+        self.phase = TurnPhase.PLAYER_PLANNING
+        self.turn_number = 1
+
+        self.pending_turn_spawns: list[PlannedThreat] = []
+        self.turn_analyses: dict[int, ThreatAnalysis] = {}
+        self.selected_target_id = ""
+
+        self._ai_thread: threading.Thread | None = None
+        self._ai_result: dict[int, ThreatAnalysis] | None = None
+        self._ai_error: str | None = None
+        self._ai_result_lock = threading.Lock()
+
         self.threats: list[Threat] = []
         self.interceptors: list[Interceptor] = []
 
         self.time_elapsed = 0.0
-        self.spawn_timer = 0.0
-        self.base_spawn_interval = 1.9
 
         self.next_threat_id = 1
         self.next_interceptor_id = 1
@@ -72,14 +97,23 @@ class Simulation:
         self.neutralized_count = 0
         self.impact_count = 0
 
+        self._sync_selected_target()
+
     def update(self, dt: float) -> None:
+        if self.phase == TurnPhase.PLAYER_PLANNING:
+            self._sync_selected_target()
+            return
+
+        if self.phase == TurnPhase.AI_THINKING:
+            self._poll_ai_result()
+            return
+
         self.time_elapsed += dt
         self.resources.tick(dt)
 
-        self._spawn_logic(dt)
         self._update_threats(dt)
 
-        analyses = self._analyze_active_threats()
+        analyses = self.turn_analyses
         self.latest_decisions = self.decision_engine.decide(
             threats=self.threats,
             analyses=analyses,
@@ -89,17 +123,143 @@ class Simulation:
 
         self._execute_decisions(self.latest_decisions)
         self._update_interceptors(dt)
-        self._refresh_ai_json(analyses)
         self._purge_destroyed_objects()
 
-    def spawn_manual(self, threat_type: ThreatType, spawn_x: float | None = None) -> None:
-        self._spawn_threat(threat_type, spawn_x)
+        if not self.threats and not self.interceptors:
+            completed_turn = self.turn_number
+            self.phase = TurnPhase.PLAYER_PLANNING
+            self.turn_number += 1
+            self.turn_analyses = {}
+            self.latest_decisions = []
+            self._sync_selected_target()
+            self._log(f"Turn {completed_turn} resolved. Queue threats for turn {self.turn_number}.")
 
-    def spawn_wave(self) -> None:
-        wave_size = self.rng.randint(3, 5)
-        for _ in range(wave_size):
-            threat_type = ThreatType.MISSILE if self.rng.random() < 0.45 else ThreatType.DRONE
-            self._spawn_threat(threat_type)
+    def spawn_manual(self, threat_type: ThreatType) -> None:
+        self.queue_threat(threat_type)
+
+    def queue_threat(self, threat_type: ThreatType, target_asset_id: str | None = None) -> bool:
+        if self.phase != TurnPhase.PLAYER_PLANNING or self.is_mission_lost():
+            return False
+
+        self._sync_selected_target()
+        selected_target = target_asset_id or self.selected_target_id
+        if not self._is_targetable_asset_id(selected_target):
+            return False
+
+        self.pending_turn_spawns.append(PlannedThreat(threat_type=threat_type, target_asset_id=selected_target))
+        return True
+
+    def clear_planned_threats(self) -> bool:
+        if self.phase != TurnPhase.PLAYER_PLANNING:
+            return False
+
+        self.pending_turn_spawns.clear()
+        return True
+
+    def start_turn(self) -> bool:
+        if self.phase != TurnPhase.PLAYER_PLANNING or self.is_mission_lost():
+            return False
+
+        if not self.pending_turn_spawns:
+            self._log("No threats queued. Add threats before starting the turn.")
+            return False
+
+        self.latest_decisions = []
+        self.latest_ai_json = []
+
+        queued_count = len(self.pending_turn_spawns)
+        for planned in self.pending_turn_spawns:
+            self._spawn_threat(planned.threat_type, planned.target_asset_id)
+
+        self.pending_turn_spawns.clear()
+        self.phase = TurnPhase.AI_THINKING
+        self.ai_provider_status = f"{self.analyzer.backend}:waiting-response"
+        self._log(f"Turn {self.turn_number} submitted with {queued_count} threats. Waiting for AI analysis.")
+
+        self._start_ai_worker()
+        return True
+
+    def is_player_turn(self) -> bool:
+        return self.phase == TurnPhase.PLAYER_PLANNING
+
+    def phase_label(self) -> str:
+        labels = {
+            TurnPhase.PLAYER_PLANNING: "PLAYER PLANNING",
+            TurnPhase.AI_THINKING: "WAITING FOR GEMINI",
+            TurnPhase.RESOLVING: "SIMULATION RESOLVING",
+        }
+        return labels[self.phase]
+
+    def queued_counts(self) -> tuple[int, int]:
+        missiles = sum(1 for planned in self.pending_turn_spawns if planned.threat_type == ThreatType.MISSILE)
+        drones = sum(1 for planned in self.pending_turn_spawns if planned.threat_type == ThreatType.DRONE)
+        return missiles, drones
+
+    def cycle_selected_target(self, step: int = 1) -> bool:
+        if self.phase != TurnPhase.PLAYER_PLANNING:
+            return False
+
+        targets = self._targetable_assets()
+        if not targets:
+            self.selected_target_id = ""
+            return False
+
+        if self.selected_target_id not in {asset.asset_id for asset in targets}:
+            self.selected_target_id = targets[0].asset_id
+            return True
+
+        current_index = next(
+            i for i, asset in enumerate(targets) if asset.asset_id == self.selected_target_id
+        )
+        next_index = (current_index + step) % len(targets)
+        self.selected_target_id = targets[next_index].asset_id
+        return True
+
+    def select_target_nearest(self, x: float, y: float, max_distance: float = 40.0) -> bool:
+        if self.phase != TurnPhase.PLAYER_PLANNING:
+            return False
+
+        targets = self._targetable_assets()
+        if not targets:
+            self.selected_target_id = ""
+            return False
+
+        nearest = min(targets, key=lambda asset: ((asset.x - x) ** 2 + (asset.y - y) ** 2) ** 0.5)
+        distance = ((nearest.x - x) ** 2 + (nearest.y - y) ** 2) ** 0.5
+        if distance > max_distance:
+            return False
+
+        self.selected_target_id = nearest.asset_id
+        return True
+
+    def selected_target(self) -> Asset | None:
+        self._sync_selected_target()
+        return self._asset_by_id(self.selected_target_id)
+
+    def selected_target_label(self) -> str:
+        asset = self.selected_target()
+        if asset is None:
+            return "none"
+        return asset.display_name if asset.display_name else asset.asset_id
+
+    def queued_plan_lines(self, max_lines: int = 5) -> list[str]:
+        counts: dict[str, dict[str, int]] = {}
+        for planned in self.pending_turn_spawns:
+            if planned.target_asset_id not in counts:
+                counts[planned.target_asset_id] = {"missile": 0, "drone": 0}
+            counts[planned.target_asset_id][planned.threat_type.value] += 1
+
+        lines: list[str] = []
+        for target_id, values in counts.items():
+            asset = self._asset_by_id(target_id)
+            label = target_id
+            if asset is not None:
+                label = asset.display_name if asset.display_name else asset.asset_id
+
+            lines.append(f"{label}: M{values['missile']} D{values['drone']}")
+
+        lines.sort()
+        return lines[:max_lines]
 
     def is_mission_lost(self) -> bool:
         return not any(asset.kind == "base" and asset.is_alive() for asset in self.assets)
@@ -210,46 +370,23 @@ class Simulation:
 
         return points
 
-    def _spawn_logic(self, dt: float) -> None:
-        interval = max(1.0, self.base_spawn_interval - min(0.9, self.time_elapsed / 120.0))
-        self.spawn_timer += dt
+    def _spawn_threat(self, threat_type: ThreatType, target_asset_id: str) -> None:
+        target = self._asset_by_id(target_asset_id)
+        if target is None or not target.is_alive():
+            fallback_targets = self._targetable_assets()
+            if not fallback_targets:
+                fallback_targets = [asset for asset in self.assets if asset.is_alive()]
+            if not fallback_targets:
+                return
+            target = fallback_targets[0]
 
-        if self.spawn_timer < interval:
-            return
-
-        self.spawn_timer = 0.0
-        self._spawn_threat(ThreatType.MISSILE if self.rng.random() < 0.45 else ThreatType.DRONE)
-
-        # Occasional second threat to force parallel prioritization decisions.
-        if self.rng.random() < 0.28:
-            self._spawn_threat(ThreatType.MISSILE if self.rng.random() < 0.35 else ThreatType.DRONE)
-
-    def _spawn_threat(self, threat_type: ThreatType, spawn_x: float | None = None) -> None:
-        defended_assets = [
-            asset for asset in self.assets if asset.is_alive() and (asset.side == "north" or not asset.side)
-        ]
-        if not defended_assets:
-            defended_assets = [asset for asset in self.assets if asset.is_alive()]
-
-        if not defended_assets:
-            return
-
-        if spawn_x is not None:
-            x = float(spawn_x)
-            y = self.height + 24.0
-        elif self.enemy_launch_points:
+        if self.enemy_launch_points:
             base_x, base_y = self.rng.choice(self.enemy_launch_points)
             x = base_x + self.rng.uniform(-22.0, 22.0)
             y = base_y + self.rng.uniform(-12.0, 12.0)
         else:
             x = float(self.rng.uniform(35, self.width - 35))
             y = self.height + 24.0
-
-        target = self.rng.choices(
-            defended_assets,
-            weights=[asset.strategic_value for asset in defended_assets],
-            k=1,
-        )[0]
 
         speed = self.rng.uniform(180, 240) if threat_type == ThreatType.MISSILE else self.rng.uniform(85, 130)
         dx = target.x - x
@@ -306,11 +443,46 @@ class Simulation:
                 else:
                     self._log(f"Impact: T{threat.threat_id} hit {target.asset_id} (-{damage} HP).")
 
-    def _analyze_active_threats(self) -> dict[int, ThreatAnalysis]:
-        active_threats = [threat for threat in self.threats if threat.alive]
-        analyses = self.analyzer.analyze_all(active_threats, self.assets)
+    def _start_ai_worker(self) -> None:
+        with self._ai_result_lock:
+            self._ai_result = None
+            self._ai_error = None
+
+        self._ai_thread = threading.Thread(target=self._analyze_turn_worker, daemon=True)
+        self._ai_thread.start()
+
+    def _analyze_turn_worker(self) -> None:
+        try:
+            active_threats = [threat for threat in self.threats if threat.alive]
+            analyses = self.analyzer.analyze_turn_blocking(active_threats, self.assets)
+
+            with self._ai_result_lock:
+                self._ai_result = analyses
+                self._ai_error = None
+        except Exception as exc:  # pragma: no cover - defensive fallback
+            with self._ai_result_lock:
+                self._ai_result = {}
+                self._ai_error = str(exc)
+
+    def _poll_ai_result(self) -> None:
+        if self._ai_thread is not None and self._ai_thread.is_alive():
+            self.ai_provider_status = self.analyzer.provider_status
+            return
+
+        with self._ai_result_lock:
+            analyses = self._ai_result or {}
+            ai_error = self._ai_error
+
+        if ai_error:
+            self._log(f"AI analysis fallback active: {ai_error}")
+
+        self.turn_analyses = analyses
+        self._refresh_ai_json(analyses)
         self.ai_provider_status = self.analyzer.provider_status
-        return analyses
+        self.phase = TurnPhase.RESOLVING
+        self._ai_thread = None
+
+        self._log(f"AI analysis ready. Resolving turn {self.turn_number}.")
 
     def _execute_decisions(self, decisions: list[Decision]) -> None:
         for decision in decisions:
@@ -435,6 +607,29 @@ class Simulation:
     def _purge_destroyed_objects(self) -> None:
         self.threats = [threat for threat in self.threats if threat.alive]
         self.interceptors = [interceptor for interceptor in self.interceptors if interceptor.alive]
+
+    def _targetable_assets(self) -> list[Asset]:
+        return [
+            asset
+            for asset in self.assets
+            if asset.is_alive()
+            and (asset.side == "north" or asset.side == "")
+            and asset.kind in {"base", "air_defense", "fighter_base", "drone_hub"}
+        ]
+
+    def _is_targetable_asset_id(self, asset_id: str) -> bool:
+        return any(asset.asset_id == asset_id for asset in self._targetable_assets())
+
+    def _sync_selected_target(self) -> None:
+        targetable = self._targetable_assets()
+        if not targetable:
+            self.selected_target_id = ""
+            return
+
+        if self.selected_target_id and any(asset.asset_id == self.selected_target_id for asset in targetable):
+            return
+
+        self.selected_target_id = targetable[0].asset_id
 
     def _asset_by_id(self, asset_id: str) -> Asset | None:
         return next((asset for asset in self.assets if asset.asset_id == asset_id), None)

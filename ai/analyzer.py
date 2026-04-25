@@ -84,6 +84,86 @@ class ThreatAnalyzer:
         self._start_refresh_if_due(alive_threats, assets, heuristic)
         return self._merge_with_cache(heuristic)
 
+    def analyze_turn_blocking(
+        self,
+        threats: Sequence[Threat],
+        assets: Sequence[Asset],
+        timeout_seconds: float = 10.0,
+    ) -> dict[int, ThreatAnalysis]:
+        alive_threats = [threat for threat in threats if threat.alive]
+        if not alive_threats:
+            return {}
+
+        heuristic = {
+            threat.threat_id: self._heuristic_analysis(threat, assets) for threat in alive_threats
+        }
+
+        if self.backend == "disabled":
+            self.provider_status = "heuristic-only (no GEMINI_API)"
+            return heuristic
+
+        threat_payload = [
+            {
+                "threat_id": threat.threat_id,
+                "threat_type": threat.threat_type.value,
+                "x": round(threat.x, 2),
+                "y": round(threat.y, 2),
+                "speed": round(threat.speed, 2),
+                "intended_target_id": threat.intended_target_id,
+            }
+            for threat in sorted(
+                alive_threats,
+                key=lambda item: heuristic[item.threat_id].urgency,
+                reverse=True,
+            )[:12]
+        ]
+
+        asset_payload = [
+            {
+                "asset_id": asset.asset_id,
+                "kind": asset.kind,
+                "x": round(asset.x, 2),
+                "y": round(asset.y, 2),
+                "strategic_value": round(asset.strategic_value, 3),
+                "alive": bool(asset.is_alive()),
+            }
+            for asset in assets
+            if asset.is_alive()
+        ]
+
+        baseline_payload = {
+            threat_id: analysis.to_json() for threat_id, analysis in heuristic.items()
+        }
+
+        with self._lock:
+            self.provider_status = f"{self.backend}:waiting-response"
+
+        try:
+            prompt = self._build_prompt(threat_payload, asset_payload, baseline_payload)
+            response_text = self._query_backend(prompt, timeout_seconds=timeout_seconds)
+
+            valid_asset_ids = {asset["asset_id"] for asset in asset_payload}
+            parsed = self._parse_response(response_text, baseline_payload, valid_asset_ids)
+
+            merged = dict(heuristic)
+            merged.update(parsed)
+
+            now = time.monotonic()
+            with self._lock:
+                for threat_id, analysis in merged.items():
+                    self._cache[threat_id] = (analysis, now)
+
+                self.provider_status = f"{self.backend}:turn-ready"
+                self._next_retry_at = 0.0
+
+            return merged
+        except Exception as exc:
+            with self._lock:
+                self.provider_status = f"{self.backend}:turn-fallback ({type(exc).__name__})"
+                self._next_retry_at = time.monotonic() + self._retry_backoff_seconds
+
+            return heuristic
+
     def _heuristic_analysis(self, threat: Threat, assets: Iterable[Asset]) -> ThreatAnalysis:
         alive_assets = [asset for asset in assets if asset.is_alive()]
         if not alive_assets:
@@ -260,14 +340,14 @@ class ThreatAnalyzer:
         }
         return json.dumps(payload, separators=(",", ":"))
 
-    def _query_backend(self, prompt: str) -> str:
+    def _query_backend(self, prompt: str, timeout_seconds: float = 6.0) -> str:
         if self.backend == "openrouter":
-            return self._query_openrouter(prompt)
+            return self._query_openrouter(prompt, timeout_seconds)
         if self.backend == "gemini-rest":
-            return self._query_gemini_rest(prompt)
+            return self._query_gemini_rest(prompt, timeout_seconds)
         raise RuntimeError("No remote backend configured")
 
-    def _query_openrouter(self, prompt: str) -> str:
+    def _query_openrouter(self, prompt: str, timeout_seconds: float = 6.0) -> str:
         body = {
             "model": self._openrouter_model,
             "messages": [
@@ -299,7 +379,7 @@ class ThreatAnalyzer:
             },
         )
 
-        with urllib.request.urlopen(request, timeout=6.0) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
         choices = payload.get("choices") or []
@@ -312,7 +392,7 @@ class ThreatAnalyzer:
 
         return content
 
-    def _query_gemini_rest(self, prompt: str) -> str:
+    def _query_gemini_rest(self, prompt: str, timeout_seconds: float = 6.0) -> str:
         body = {
             "contents": [
                 {
@@ -338,7 +418,7 @@ class ThreatAnalyzer:
             headers={"Content-Type": "application/json"},
         )
 
-        with urllib.request.urlopen(request, timeout=6.0) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
 
         candidates = payload.get("candidates") or []

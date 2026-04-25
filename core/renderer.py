@@ -33,6 +33,7 @@ class Renderer:
         surface.blit(self.background, (0, 0))
 
         self._draw_assets(surface, simulation)
+        self._draw_selected_target(surface, simulation)
         self._draw_threats(surface, simulation)
         self._draw_interceptors(surface, simulation)
         self._draw_hud(surface, simulation)
@@ -172,6 +173,19 @@ class Renderer:
             marker = self.small_font.render(f"T{threat.threat_id}", True, (246, 246, 246))
             surface.blit(marker, (x - marker.get_width() // 2, y - 24))
 
+    def _draw_selected_target(self, surface: pygame.Surface, simulation: Simulation) -> None:
+        target = simulation.selected_target()
+        if target is None:
+            return
+
+        x = int(target.x)
+        y = int(target.y)
+        pygame.draw.circle(surface, (255, 229, 128), (x, y), 32, 2)
+        pygame.draw.circle(surface, (255, 247, 196), (x, y), 39, 1)
+
+        label = self.small_font.render("SELECTED TARGET", True, (255, 246, 202))
+        surface.blit(label, (x - label.get_width() // 2, y - 54))
+
     def _draw_interceptors(self, surface: pygame.Surface, simulation: Simulation) -> None:
         for interceptor in simulation.interceptors:
             x = int(interceptor.x)
@@ -200,13 +214,20 @@ class Renderer:
         surface.blit(title, (x, y))
         y += 34
 
+        missiles_queued, drones_queued = simulation.queued_counts()
+
         stats = [
+            f"Turn: {simulation.turn_number}",
+            f"Phase: {simulation.phase_label()}",
+            f"Selected Target: {simulation.selected_target_label()}",
             f"Time: {simulation.time_elapsed:5.1f}s",
             f"Neutralized: {simulation.neutralized_count}",
             f"Impacts/Leaks: {simulation.impact_count}",
             f"AD Ammo: {simulation.resources.air_defense_ammo}",
             f"Fighters Ready: {simulation.resources.fighters_ready}",
             f"Drones Ready: {simulation.resources.drones_ready}",
+            f"Queued Missiles: {missiles_queued}",
+            f"Queued Drones: {drones_queued}",
             f"AI Source: {simulation.ai_provider_status}",
             f"Map Source: {self.map_source_label}",
         ]
@@ -214,6 +235,22 @@ class Renderer:
             text = self.main_font.render(line, True, (216, 232, 245))
             surface.blit(text, (x, y))
             y += 22
+
+        y += 6
+        queue_title = self.main_font.render("Queued attacks by target", True, (255, 228, 173))
+        surface.blit(queue_title, (x, y))
+        y += 22
+
+        queued_lines = simulation.queued_plan_lines(max_lines=5)
+        if not queued_lines:
+            text = self.small_font.render("No queued attacks", True, (237, 223, 193))
+            surface.blit(text, (x, y))
+            y += 18
+        else:
+            for line in queued_lines:
+                text = self.small_font.render(line, True, (237, 223, 193))
+                surface.blit(text, (x, y))
+                y += 18
 
         y += 6
         decisions_title = self.main_font.render("Latest deterministic decisions", True, (171, 216, 255))
@@ -256,11 +293,18 @@ class Renderer:
             surface.blit(text, (x, y))
             y += 18
 
-        controls = self.small_font.render(
-            "Controls: M missile | D drone | W wave | LMB/RMB spawn | ESC quit",
-            True,
-            (216, 233, 248),
-        )
+        if simulation.is_player_turn():
+            controls = self.small_font.render(
+                "Planning: M missile | D drone | LEFT/RIGHT switch target | C clear | ENTER start",
+                True,
+                (216, 233, 248),
+            )
+        else:
+            controls = self.small_font.render(
+                "Turn in progress: waiting for Gemini or resolving engagements | ESC quit",
+                True,
+                (216, 233, 248),
+            )
         surface.blit(controls, (14, self.height - 24))
 
     def _draw_mission_lost(self, surface: pygame.Surface) -> None:

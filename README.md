@@ -37,24 +37,14 @@ map.svg                  # Visual map source + viewBox coordinate frame
 
 ## Run
 
-1. Create and activate virtual environment:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate
-```
-
-2. Install dependencies:
+ `LEFT` / `RIGHT` (or `Q` / `E`): switch highlighted target base
+ left-click / right-click on a base: select highlighted target base
+ `M`: queue missile against highlighted base
+ `D`: queue drone against highlighted base
 
 ```bash
 python -m pip install --upgrade pip
 python -m pip install -r requirements.txt
-```
-
-3. Start simulation:
-
-```bash
-python main.py
 ```
 
 ## Gemini API setup (`.env`)
@@ -76,12 +66,25 @@ If `GEMINI_API` is missing or unreachable, the app falls back to local heuristic
 
 ## Controls
 
-- `M`: spawn missile
-- `D`: spawn drone
-- `W`: spawn random wave
-- left click: spawn missile at cursor x-position
-- right click: spawn drone at cursor x-position
+- `LEFT` / `RIGHT` (or `Q` / `E`): switch highlighted target base
+- left-click / right-click on a base: select highlighted target base
+- `M`: queue missile against highlighted base
+- `D`: queue drone against highlighted base
+- `C`: clear queued threats
+- `ENTER` or `SPACE`: submit turn (send threats to Gemini, wait for response, then resolve)
 - `ESC`: quit
+
+## Turn flow
+
+The simulation is now turn-based:
+
+1. Player highlights one of the defender bases.
+2. Player queues missiles and/or drones for that base.
+3. Player can switch highlighted base and queue more threats to different bases in the same turn.
+4. Player submits the turn.
+5. System sends queued-threat context to Gemini analysis and waits for response.
+6. Deterministic decision engine resolves engagements automatically.
+7. When all threats/interceptors are resolved, control returns to player planning.
 
 ## Hybrid architecture constraints in this implementation
 

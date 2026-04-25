@@ -52,19 +52,24 @@ def main() -> None:
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
-                elif event.key == pygame.K_m:
-                    simulation.spawn_manual(ThreatType.MISSILE)
-                elif event.key == pygame.K_d:
-                    simulation.spawn_manual(ThreatType.DRONE)
-                elif event.key == pygame.K_w:
-                    simulation.spawn_wave()
+                elif simulation.is_player_turn():
+                    if event.key == pygame.K_m:
+                        simulation.spawn_manual(ThreatType.MISSILE)
+                    elif event.key == pygame.K_d:
+                        simulation.spawn_manual(ThreatType.DRONE)
+                    elif event.key in (pygame.K_LEFT, pygame.K_q):
+                        simulation.cycle_selected_target(-1)
+                    elif event.key in (pygame.K_RIGHT, pygame.K_e, pygame.K_TAB):
+                        simulation.cycle_selected_target(1)
+                    elif event.key == pygame.K_c:
+                        simulation.clear_planned_threats()
+                    elif event.key in (pygame.K_RETURN, pygame.K_SPACE):
+                        simulation.start_turn()
 
-            elif event.type == pygame.MOUSEBUTTONDOWN:
+            elif event.type == pygame.MOUSEBUTTONDOWN and simulation.is_player_turn():
                 x, _ = pygame.mouse.get_pos()
-                if event.button == 1:
-                    simulation.spawn_manual(ThreatType.MISSILE, float(x))
-                elif event.button == 3:
-                    simulation.spawn_manual(ThreatType.DRONE, float(x))
+                if event.button in (1, 3):
+                    simulation.select_target_nearest(float(x), float(y))
 
         simulation.update(dt)
         renderer.draw(screen, simulation)
