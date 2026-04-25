@@ -11,6 +11,9 @@ class ResourceState:
     air_defense_ammo: int = 20
     air_defense_max: int = 20  # ✅ NEW (optional cap)
 
+    fuel_total: int = 10
+    fighter_fuel_reserved: int = 0
+
     fighters_total: int = 2
     fighters_busy: float = 0.0
 
@@ -42,6 +45,10 @@ class ResourceState:
     def fighters_available(self) -> int:
         return max(0, int(self.fighters_total - self.fighters_busy))
 
+    @property
+    def fuel_available(self) -> int:
+        return max(0, int(self.fuel_total - self.fighter_fuel_reserved))
+
     # -----------------------------
     # ACTIONS
     # -----------------------------
@@ -57,9 +64,25 @@ class ResourceState:
         if self.fighters_available <= 0 or self.fighter_launch_cooldown > 0:
             return False
 
+        if self.fuel_available <= 0:
+            return False
+
         self.fighters_busy += 1
         self.fighter_launch_cooldown = self.fighter_launch_delay
+        self.fighter_fuel_reserved += 1
         return True
+
+    def recover_fighter(self) -> None:
+        self.fighters_busy = max(0.0, self.fighters_busy - 1.0)
+
+    def fighter_returned(self) -> None:
+        if self.fighter_fuel_reserved > 0:
+            self.fighter_fuel_reserved -= 1
+        self.fuel_total = max(0, self.fuel_total - 1)
+
+    def cancel_fighter_fuel_reservation(self) -> None:
+        if self.fighter_fuel_reserved > 0:
+            self.fighter_fuel_reserved -= 1
 
     def launch_drone(self) -> bool:
         if self.drones_ready <= 0 or self.drone_launch_cooldown > 0:

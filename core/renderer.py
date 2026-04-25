@@ -229,11 +229,13 @@ class Renderer:
             f"Time: {simulation.time_elapsed:.1f}s",
             "",
             f"AD Ammo: {simulation.resources.air_defense_ammo}",
-            f"Fighters: {simulation.resources.fighters_available}/{simulation.resources.fighters_total}",
-            f"Drones: {simulation.resources.drones_ready}",
-            "",
-            f"Neutralized: {simulation.neutralized_count}",
-            f"Impacts: {simulation.impact_count}",
+            f"Fuel: {simulation.resources.fuel_available}/{simulation.resources.fuel_total}",
+            f"Fighters: {simulation.resources.fighters_available}/{simulation.resources.fighters_total}",            
+            f"Drones Ready: {simulation.resources.drones_ready}",
+            f"Queued Missiles: {missiles_queued}",
+            f"Queued Drones: {drones_queued}",
+            f"AI Source: {simulation.ai_provider_status}",
+            f"Map Source: {self.map_source_label}",
         ]
 
         for line in stats:

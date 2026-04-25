@@ -20,6 +20,8 @@ class Interceptor:
     x: float
     y: float
     speed: float
+    remaining_engagements: int = 1
+    returning: bool = False
     alive: bool = True
 
     def update_toward(self, target_x: float, target_y: float, dt: float) -> bool:
