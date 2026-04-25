@@ -33,7 +33,7 @@ class ResourceState:
     fighter_launch_delay: float = 0.4
 
     air_defense_delay: float = 1.0
-    air_defense_radius: float = 100.0
+    air_defense_radius: float = 100000.0
     drone_launch_delay: float = 2.0
 
     # ✅ NEW: resupply config
