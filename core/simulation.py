@@ -15,6 +15,15 @@ from core.map_loader import MapData, MapProjector, load_map_data
 from models import Asset, Interceptor, InterceptorType, ResourceState, Threat, ThreatType
 
 
+MISSILE_SPEED_RANGE = (30, 60)
+DRONE_SPEED_RANGE = (10, 25)
+
+AIR_DEFENSE_SPEED = 100
+FIGHTER_SPEED = 75
+DRONE_INTERCEPTOR_SPEED = 40
+
+
+
 class TurnPhase(str, Enum):
     PLAYER_PLANNING = "player_planning"
     AI_THINKING = "ai_thinking"
@@ -389,7 +398,10 @@ class Simulation:
             x = float(self.rng.uniform(35, self.width - 35))
             y = self.height + 24.0
 
-        speed = self.rng.uniform(180, 240) if threat_type == ThreatType.MISSILE else self.rng.uniform(85, 130)
+        if threat_type == ThreatType.MISSILE:
+            speed = self.rng.uniform(*MISSILE_SPEED_RANGE)
+        else:
+            speed = self.rng.uniform(*DRONE_SPEED_RANGE)
         dx = target.x - x
         dy = target.y - y
         distance = max((dx**2 + dy**2) ** 0.5, 1.0)
@@ -495,9 +507,6 @@ class Simulation:
             if source is None or not source.is_alive():
                 continue
 
-            # -------------------------
-            # AIR DEFENSE (WITH RADIUS)
-            # -------------------------
             if decision.action == DecisionAction.ENGAGE_AIR_DEFENSE:
                 if self.resources.consume_air_defense(
                     source.x,
@@ -512,9 +521,6 @@ class Simulation:
                         f" (score={decision.priority_score:.2f})."
                     )
 
-            # -------------------------
-            # FIGHTER
-            # -------------------------
             elif decision.action == DecisionAction.SCRAMBLE_FIGHTER:
                 if self.resources.launch_fighter():
                     self._launch_interceptor(decision, threat)
@@ -526,9 +532,6 @@ class Simulation:
                 elif self.resources.fuel <= 0:
                     self._log("Decision blocked: No fuel available for fighter launch.")
 
-            # -------------------------
-            # DRONE
-            # -------------------------
             elif decision.action == DecisionAction.DEPLOY_DRONE:
                 if self.resources.launch_drone():
                     self._launch_interceptor(decision, threat)
@@ -538,7 +541,7 @@ class Simulation:
                         f" (score={decision.priority_score:.2f})."
                     )
 
-            # HOLD = do nothing on purpose
+            # HOLD = do nothing
 
     def _launch_interceptor(self, decision: Decision, threat: Threat) -> None:
         source = self._asset_by_id(decision.launch_from)
@@ -549,16 +552,13 @@ class Simulation:
 
         if decision.action == DecisionAction.ENGAGE_AIR_DEFENSE:
             interceptor_type = InterceptorType.AIR_DEFENSE
-            speed = 365.0
-            remaining_engagements = 1
+            speed = AIR_DEFENSE_SPEED
         elif decision.action == DecisionAction.SCRAMBLE_FIGHTER:
             interceptor_type = InterceptorType.FIGHTER
-            speed = 275.0
-            remaining_engagements = 3
+            speed = FIGHTER_SPEED
         else:
             interceptor_type = InterceptorType.DRONE
-            speed = 205.0
-            remaining_engagements = 1
+            speed = DRONE_INTERCEPTOR_SPEED
 
         interceptor = Interceptor(
             interceptor_id=self.next_interceptor_id,
@@ -568,7 +568,6 @@ class Simulation:
             x=source.x,
             y=source.y,
             speed=speed,
-            remaining_engagements=remaining_engagements,
         )
 
         self.next_interceptor_id += 1
@@ -577,10 +576,6 @@ class Simulation:
     def _update_interceptors(self, dt: float) -> None:
         for interceptor in self.interceptors:
             if not interceptor.alive:
-                continue
-
-            if interceptor.interceptor_type == InterceptorType.FIGHTER:
-                self._update_fighter_interceptor(interceptor, dt)
                 continue
 
             threat = self._threat_by_id(interceptor.target_threat_id)
