@@ -38,90 +38,133 @@ class DecisionEngine:
         resources: ResourceState,
         assets: Iterable[Asset],
     ) -> list[Decision]:
+
         alive_assets = [asset for asset in assets if asset.is_alive()]
         if not alive_assets:
             return []
 
-        candidates = [threat for threat in threats if threat.alive and not threat.assigned]
+        candidates = [t for t in threats if t.alive and not t.assigned]
         if not candidates:
             return []
 
         asset_lookup = {asset.asset_id: asset for asset in alive_assets}
 
+        # --- SCORE THREATS ---
         scored_threats: list[tuple[float, Threat, ThreatAnalysis]] = []
+
         for threat in candidates:
             analysis = analyses.get(threat.threat_id)
-            if analysis is None:
+            if not analysis:
                 continue
 
             likely_asset = asset_lookup.get(analysis.likely_target)
-            if likely_asset is None:
-                likely_asset = min(alive_assets, key=lambda asset: threat.distance_to(asset.x, asset.y))
+            if not likely_asset:
+                likely_asset = min(
+                    alive_assets,
+                    key=lambda a: threat.distance_to(a.x, a.y)
+                )
 
-            proximity = 1.0 - min(1.0, threat.distance_to(likely_asset.x, likely_asset.y) / 900.0)
+            proximity = 1.0 - min(
+                1.0,
+                threat.distance_to(likely_asset.x, likely_asset.y) / 900.0
+            )
+
             score = (
                 0.40 * analysis.threat_level
                 + 0.30 * analysis.urgency
                 + 0.20 * analysis.confidence
                 + 0.10 * proximity
             )
+
             scored_threats.append((score, threat, analysis))
 
-        scored_threats.sort(key=lambda item: item[0], reverse=True)
+        scored_threats.sort(key=lambda x: x[0], reverse=True)
 
+        # --- RESOURCE SNAPSHOT ---
         planned_ammo = resources.air_defense_ammo
-        planned_fighters = resources.fighters_ready
+        planned_fighters = resources.fighters_available  # ✅ NEW
         planned_drones = resources.drones_ready
 
         air_defense_ready = resources.air_defense_cooldown <= 0.0
         fighter_ready = resources.fighter_launch_cooldown <= 0.0
         drone_ready = resources.drone_launch_cooldown <= 0.0
 
-        missile_count = sum(1 for threat in candidates if threat.threat_type == ThreatType.MISSILE)
+        missile_count = sum(1 for t in candidates if t.threat_type == ThreatType.MISSILE)
         future_pressure = min(1.0, len(candidates) / 5.0 + 0.35 * missile_count / 4.0)
 
         decisions: list[Decision] = []
 
+        # --- MAIN LOOP ---
         for score, threat, analysis in scored_threats:
-            high_priority = score >= 0.68 or analysis.urgency >= 0.78 or analysis.threat_level >= 0.80
+
+            high_priority = (
+                score >= 0.68
+                or analysis.urgency >= 0.78
+                or analysis.threat_level >= 0.80
+            )
+
             conservation_mode = (
                 future_pressure >= 0.65
                 or planned_ammo <= self.min_air_defense_reserve
                 or planned_fighters <= self.min_fighter_reserve
             )
 
-            if threat.threat_type == ThreatType.MISSILE and air_defense_ready and planned_ammo > 0:
+            # =========================
+            # AIR DEFENSE (MISSILES)
+            # =========================
+            if (
+                threat.threat_type == ThreatType.MISSILE
+                and air_defense_ready
+                and planned_ammo > 0
+            ):
                 if planned_ammo > self.min_air_defense_reserve or high_priority:
-                    launch_from = self._nearest_source(threat, alive_assets, ("air_defense",))
+                    launch_from = self._nearest_source(
+                        threat, alive_assets, ("air_defense",)
+                    )
+
                     decisions.append(
                         Decision(
                             threat_id=threat.threat_id,
                             action=DecisionAction.ENGAGE_AIR_DEFENSE,
                             launch_from=launch_from,
                             priority_score=score,
-                            rationale="Missile threat and AD can engage with favorable efficiency.",
+                            rationale="Missile threat engaged using air defense.",
                         )
                     )
+
                     planned_ammo -= 1
                     air_defense_ready = False
                     continue
 
+            # =========================
+            # FIGHTERS (REUSABLE)
+            # =========================
             if fighter_ready and planned_fighters > 0:
+
                 if high_priority or (score >= 0.58 and not conservation_mode):
-                    launch_from = self._nearest_source(threat, alive_assets, ("fighter_base",))
+
+                    launch_from = self._nearest_source(
+                        threat, alive_assets, ("fighter_base",)
+                    )
+
                     decisions.append(
                         Decision(
                             threat_id=threat.threat_id,
                             action=DecisionAction.SCRAMBLE_FIGHTER,
                             launch_from=launch_from,
                             priority_score=score,
-                            rationale="Fighter selected for coverage while preserving AD ammo.",
+                            rationale="Fighter deployed (reusable asset with cooldown).",
                         )
                     )
-                    planned_fighters -= 1
+
+                    # ❗ IMPORTANT: do NOT consume fighter permanently
+                    planned_fighters -= 1   # temporary planning only
                     fighter_ready = False
                     continue
 
+            # =========================
+            # DRONES
+            # =========================
             if (
                 threat.threat_type == ThreatType.DRONE
                 and drone_ready
@@ -129,24 +172,32 @@ class DecisionEngine:
                 and not conservation_mode
                 and score >= 0.45
             ):
-                launch_from = self._nearest_source(threat, alive_assets, ("drone_hub", "base"))
+
+                launch_from = self._nearest_source(
+                    threat, alive_assets, ("drone_hub", "base")
+                )
+
                 decisions.append(
                     Decision(
                         threat_id=threat.threat_id,
                         action=DecisionAction.DEPLOY_DRONE,
                         launch_from=launch_from,
                         priority_score=score,
-                        rationale="Drone deployment is sufficient and low-cost for this target.",
+                        rationale="Drone used for low-cost interception.",
                     )
                 )
+
                 planned_drones -= 1
                 drone_ready = False
                 continue
 
+            # =========================
+            # HOLD
+            # =========================
             if threat.threat_type == ThreatType.DRONE and conservation_mode:
-                rationale = "Holding fire to preserve interceptors for probable higher-priority threats."
+                rationale = "Holding to preserve resources for higher threats."
             else:
-                rationale = "No resource currently available with acceptable efficiency/cost tradeoff."
+                rationale = "No efficient resource available."
 
             decisions.append(
                 Decision(
@@ -161,8 +212,11 @@ class DecisionEngine:
         return decisions
 
     def _nearest_source(self, threat: Threat, assets: list[Asset], kinds: tuple[str, ...]) -> str:
-        candidates = [asset for asset in assets if asset.kind in kinds]
+        candidates = [a for a in assets if a.kind in kinds]
         if not candidates:
             return "unknown"
 
-        return min(candidates, key=lambda asset: threat.distance_to(asset.x, asset.y)).asset_id
+        return min(
+            candidates,
+            key=lambda a: threat.distance_to(a.x, a.y)
+        ).asset_id

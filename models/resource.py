@@ -1,75 +1,93 @@
-from dataclasses import dataclass, field
+from __future__ import annotations
+
+from dataclasses import dataclass
 
 
 @dataclass
 class ResourceState:
-    air_defense_ammo: int = 14
-    fighters_ready: int = 3
-    drones_ready: int = 2
+    # -----------------------------
+    # STOCKS
+    # -----------------------------
+    air_defense_ammo: int = 6
 
-    max_fighters: int = 3
-    max_drones: int = 2
+    fighters_total: int = 2
+    fighters_busy: float = 0.0  # float for smooth return over time
 
+    drones_ready: int = 3
+
+    # -----------------------------
+    # COOLDOWNS (seconds)
+    # -----------------------------
     air_defense_cooldown: float = 0.0
     fighter_launch_cooldown: float = 0.0
     drone_launch_cooldown: float = 0.0
 
-    _fighter_recovery: list[float] = field(default_factory=list)
-    _drone_recovery: list[float] = field(default_factory=list)
+    # -----------------------------
+    # CONFIG
+    # -----------------------------
+    fighter_return_rate: float = 0.25   # fighters per second
+    fighter_launch_delay: float = 1.5
 
-    def tick(self, dt: float) -> None:
-        self.air_defense_cooldown = max(0.0, self.air_defense_cooldown - dt)
-        self.fighter_launch_cooldown = max(0.0, self.fighter_launch_cooldown - dt)
-        self.drone_launch_cooldown = max(0.0, self.drone_launch_cooldown - dt)
+    air_defense_delay: float = 1.0
+    drone_launch_delay: float = 2.0
 
-        self._update_recovery(self._fighter_recovery, dt, "fighters_ready", self.max_fighters)
-        self._update_recovery(self._drone_recovery, dt, "drones_ready", self.max_drones)
+    # -----------------------------
+    # DERIVED
+    # -----------------------------
+    @property
+    def fighters_available(self) -> int:
+        return max(0, int(self.fighters_total - self.fighters_busy))
 
-    def can_fire_air_defense(self) -> bool:
-        return self.air_defense_ammo > 0 and self.air_defense_cooldown <= 0.0
-
-    def can_launch_fighter(self) -> bool:
-        return self.fighters_ready > 0 and self.fighter_launch_cooldown <= 0.0
-
-    def can_launch_drone(self) -> bool:
-        return self.drones_ready > 0 and self.drone_launch_cooldown <= 0.0
-
+    # -----------------------------
+    # ACTIONS
+    # -----------------------------
     def consume_air_defense(self) -> bool:
-        if not self.can_fire_air_defense():
+        if self.air_defense_ammo <= 0 or self.air_defense_cooldown > 0:
             return False
 
         self.air_defense_ammo -= 1
-        self.air_defense_cooldown = 0.8
+        self.air_defense_cooldown = self.air_defense_delay
         return True
 
     def launch_fighter(self) -> bool:
-        if not self.can_launch_fighter():
+        if self.fighters_available <= 0 or self.fighter_launch_cooldown > 0:
             return False
 
-        self.fighters_ready -= 1
-        self.fighter_launch_cooldown = 1.6
-        self._fighter_recovery.append(9.0)
+        self.fighters_busy += 1
+        self.fighter_launch_cooldown = self.fighter_launch_delay
         return True
 
     def launch_drone(self) -> bool:
-        if not self.can_launch_drone():
+        if self.drones_ready <= 0 or self.drone_launch_cooldown > 0:
             return False
 
         self.drones_ready -= 1
-        self.drone_launch_cooldown = 1.2
-        self._drone_recovery.append(6.5)
+        self.drone_launch_cooldown = self.drone_launch_delay
         return True
 
-    def _update_recovery(self, timers: list[float], dt: float, attr: str, max_value: int) -> None:
-        recovered = 0
-        next_timers: list[float] = []
+    # -----------------------------
+    # UPDATE LOOP
+    # -----------------------------
+    def tick(self, dt: float) -> None:
+        # Cooldowns
+        if self.air_defense_cooldown > 0:
+            self.air_defense_cooldown -= dt
+            if self.air_defense_cooldown < 0:
+                self.air_defense_cooldown = 0
 
-        for timer in timers:
-            timer -= dt
-            if timer <= 0:
-                recovered += 1
-            else:
-                next_timers.append(timer)
+        if self.fighter_launch_cooldown > 0:
+            self.fighter_launch_cooldown -= dt
+            if self.fighter_launch_cooldown < 0:
+                self.fighter_launch_cooldown = 0
 
-        setattr(self, attr, min(max_value, getattr(self, attr) + recovered))
-        timers[:] = next_timers
+        if self.drone_launch_cooldown > 0:
+            self.drone_launch_cooldown -= dt
+            if self.drone_launch_cooldown < 0:
+                self.drone_launch_cooldown = 0
+
+        # Fighter return over time
+        if self.fighters_busy > 0:
+            self.fighters_busy -= self.fighter_return_rate * dt
+
+            if self.fighters_busy < 0:
+                self.fighters_busy = 0

@@ -224,7 +224,7 @@ class Renderer:
             f"Neutralized: {simulation.neutralized_count}",
             f"Impacts/Leaks: {simulation.impact_count}",
             f"AD Ammo: {simulation.resources.air_defense_ammo}",
-            f"Fighters Ready: {simulation.resources.fighters_ready}",
+            f"Fighters: {simulation.resources.fighters_available}/{simulation.resources.fighters_total}",            
             f"Drones Ready: {simulation.resources.drones_ready}",
             f"Queued Missiles: {missiles_queued}",
             f"Queued Drones: {drones_queued}",

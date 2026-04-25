@@ -67,7 +67,7 @@ def main() -> None:
                         simulation.start_turn()
 
             elif event.type == pygame.MOUSEBUTTONDOWN and simulation.is_player_turn():
-                x, _ = pygame.mouse.get_pos()
+                x, y = pygame.mouse.get_pos()
                 if event.button in (1, 3):
                     simulation.select_target_nearest(float(x), float(y))
 
