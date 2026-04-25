@@ -8,10 +8,11 @@ class ResourceState:
     # -----------------------------
     # STOCKS
     # -----------------------------
-    air_defense_ammo: int = 6
+    air_defense_ammo: int = 20
+    air_defense_max: int = 20  # ✅ NEW (optional cap)
 
     fighters_total: int = 2
-    fighters_busy: float = 0.0  # float for smooth return over time
+    fighters_busy: float = 0.0
 
     drones_ready: int = 3
 
@@ -25,11 +26,14 @@ class ResourceState:
     # -----------------------------
     # CONFIG
     # -----------------------------
-    fighter_return_rate: float = 0.25   # fighters per second
+    fighter_return_rate: float = 0.25
     fighter_launch_delay: float = 1.5
 
     air_defense_delay: float = 1.0
     drone_launch_delay: float = 2.0
+
+    # ✅ NEW: resupply config
+    air_defense_resupply_per_turn: int = 2
 
     # -----------------------------
     # DERIVED
@@ -66,7 +70,17 @@ class ResourceState:
         return True
 
     # -----------------------------
-    # UPDATE LOOP
+    # 🆕 TURN-BASED RESUPPLY
+    # -----------------------------
+    def resupply_after_turn(self) -> None:
+        self.air_defense_ammo += self.air_defense_resupply_per_turn
+
+        # Optional cap
+        if self.air_defense_ammo > self.air_defense_max:
+            self.air_defense_ammo = self.air_defense_max
+
+    # -----------------------------
+    # UPDATE LOOP (REAL-TIME)
     # -----------------------------
     def tick(self, dt: float) -> None:
         # Cooldowns
@@ -88,6 +102,5 @@ class ResourceState:
         # Fighter return over time
         if self.fighters_busy > 0:
             self.fighters_busy -= self.fighter_return_rate * dt
-
             if self.fighters_busy < 0:
                 self.fighters_busy = 0
