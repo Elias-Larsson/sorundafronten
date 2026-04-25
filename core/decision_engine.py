@@ -110,6 +110,27 @@ class DecisionEngine:
             )
 
             # =========================
+            # FIGHTERS (REUSABLE)
+            # =========================
+            if fighter_ready and planned_fighters > 0:
+                launch_from = self._nearest_source(
+                    threat, alive_assets, ("fighter_base",)
+                )
+
+                decisions.append(
+                    Decision(
+                        threat_id=threat.threat_id,
+                        action=DecisionAction.SCRAMBLE_FIGHTER,
+                        launch_from=launch_from,
+                        priority_score=score,
+                        rationale="Fighter deployed against available target.",
+                    )
+                )
+
+                planned_fighters -= 1
+                continue
+
+            # =========================
             # AIR DEFENSE (MISSILES)
             # =========================
             if (
@@ -134,33 +155,6 @@ class DecisionEngine:
 
                     planned_ammo -= 1
                     air_defense_ready = False
-                    continue
-
-            # =========================
-            # FIGHTERS (REUSABLE)
-            # =========================
-            if fighter_ready and planned_fighters > 0:
-
-                if high_priority or score >= 0.50 or (
-                    threat.threat_type == ThreatType.DRONE and not conservation_mode
-                ):
-
-                    launch_from = self._nearest_source(
-                        threat, alive_assets, ("fighter_base",)
-                    )
-
-                    decisions.append(
-                        Decision(
-                            threat_id=threat.threat_id,
-                            action=DecisionAction.SCRAMBLE_FIGHTER,
-                            launch_from=launch_from,
-                            priority_score=score,
-                            rationale="Fighter deployed (reusable asset with cooldown).",
-                        )
-                    )
-
-                    planned_fighters -= 1
-                    fighter_ready = False
                     continue
 
             # =========================

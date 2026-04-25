@@ -553,12 +553,15 @@ class Simulation:
         if decision.action == DecisionAction.ENGAGE_AIR_DEFENSE:
             interceptor_type = InterceptorType.AIR_DEFENSE
             speed = AIR_DEFENSE_SPEED
+            remaining_engagements = 1
         elif decision.action == DecisionAction.SCRAMBLE_FIGHTER:
             interceptor_type = InterceptorType.FIGHTER
             speed = FIGHTER_SPEED
+            remaining_engagements = 3
         else:
             interceptor_type = InterceptorType.DRONE
             speed = DRONE_INTERCEPTOR_SPEED
+            remaining_engagements = 1
 
         interceptor = Interceptor(
             interceptor_id=self.next_interceptor_id,
@@ -568,6 +571,7 @@ class Simulation:
             x=source.x,
             y=source.y,
             speed=speed,
+            remaining_engagements=remaining_engagements,
         )
 
         self.next_interceptor_id += 1
@@ -576,6 +580,10 @@ class Simulation:
     def _update_interceptors(self, dt: float) -> None:
         for interceptor in self.interceptors:
             if not interceptor.alive:
+                continue
+
+            if interceptor.interceptor_type == InterceptorType.FIGHTER:
+                self._update_fighter_interceptor(interceptor, dt)
                 continue
 
             threat = self._threat_by_id(interceptor.target_threat_id)
@@ -631,7 +639,8 @@ class Simulation:
             next_threat.assigned = True
             threat = next_threat
 
-        reached = interceptor.update_toward(threat.x, threat.y, dt)
+        intercept_x, intercept_y = self._fighter_intercept_point(interceptor, threat)
+        reached = interceptor.update_toward(intercept_x, intercept_y, dt)
         if not reached:
             return
 
@@ -669,6 +678,40 @@ class Simulation:
         if not candidates:
             return None
         return min(candidates, key=lambda threat: threat.distance_to(x, y))
+
+    def _fighter_intercept_point(self, interceptor: Interceptor, threat: Threat) -> tuple[float, float]:
+        dx = threat.x - interceptor.x
+        dy = threat.y - interceptor.y
+        a = threat.vx * threat.vx + threat.vy * threat.vy - interceptor.speed * interceptor.speed
+        b = 2.0 * (dx * threat.vx + dy * threat.vy)
+        c = dx * dx + dy * dy
+
+        if abs(a) <= 1e-6:
+            if abs(b) <= 1e-6:
+                return threat.x, threat.y
+            time_to_intercept = -c / b
+        else:
+            discriminant = b * b - 4.0 * a * c
+            if discriminant < 0:
+                return threat.x, threat.y
+
+            root = discriminant ** 0.5
+            times = [
+                (-b - root) / (2.0 * a),
+                (-b + root) / (2.0 * a),
+            ]
+            positive_times = [time for time in times if time > 0]
+            if not positive_times:
+                return threat.x, threat.y
+            time_to_intercept = min(positive_times)
+
+        if time_to_intercept <= 0:
+            return threat.x, threat.y
+
+        return (
+            threat.x + threat.vx * time_to_intercept,
+            threat.y + threat.vy * time_to_intercept,
+        )
 
     def _kill_probability(self, interceptor_type: InterceptorType, threat_type: ThreatType) -> float:
         table = {

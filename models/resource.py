@@ -30,7 +30,7 @@ class ResourceState:
     # -----------------------------
     # CONFIG
     # -----------------------------
-    fighter_launch_delay: float = 0.4
+    fighter_launch_delay: float = 0.0
 
     air_defense_delay: float = 1.0
     air_defense_radius: float = 100000.0
