@@ -490,8 +490,20 @@ class Simulation:
             if threat is None or not threat.alive or threat.assigned:
                 continue
 
+            source = self._asset_by_id(decision.launch_from)
+            if source is None or not source.is_alive():
+                continue
+
+            # -------------------------
+            # AIR DEFENSE (WITH RADIUS)
+            # -------------------------
             if decision.action == DecisionAction.ENGAGE_AIR_DEFENSE:
-                if self.resources.consume_air_defense():
+                if self.resources.consume_air_defense(
+                    source.x,
+                    source.y,
+                    threat.x,
+                    threat.y
+                ):
                     self._launch_interceptor(decision, threat)
                     threat.assigned = True
                     self._log(
@@ -499,6 +511,9 @@ class Simulation:
                         f" (score={decision.priority_score:.2f})."
                     )
 
+            # -------------------------
+            # FIGHTER
+            # -------------------------
             elif decision.action == DecisionAction.SCRAMBLE_FIGHTER:
                 if self.resources.launch_fighter():
                     self._launch_interceptor(decision, threat)
@@ -510,6 +525,9 @@ class Simulation:
                 elif self.resources.fuel_available <= 0:
                     self._log("Decision blocked: No fuel available for fighter launch.")
 
+            # -------------------------
+            # DRONE
+            # -------------------------
             elif decision.action == DecisionAction.DEPLOY_DRONE:
                 if self.resources.launch_drone():
                     self._launch_interceptor(decision, threat)
@@ -519,7 +537,7 @@ class Simulation:
                         f" (score={decision.priority_score:.2f})."
                     )
 
-            # HOLD decisions are intentional non-actions and stay in the on-screen rationale list.
+            # HOLD = do nothing on purpose
 
     def _launch_interceptor(self, decision: Decision, threat: Threat) -> None:
         source = self._asset_by_id(decision.launch_from)

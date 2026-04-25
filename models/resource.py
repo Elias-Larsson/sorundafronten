@@ -33,6 +33,7 @@ class ResourceState:
     fighter_launch_delay: float = 1.5
 
     air_defense_delay: float = 1.0
+    air_defense_radius: float = 100.0
     drone_launch_delay: float = 2.0
 
     # ✅ NEW: resupply config
@@ -44,6 +45,14 @@ class ResourceState:
     @property
     def fighters_available(self) -> int:
         return max(0, int(self.fighters_total - self.fighters_busy))
+    
+
+    def in_air_defense_range(self, source_x: float, source_y: float,
+                        target_x: float, target_y: float) -> bool:
+        dx = target_x - source_x
+        dy = target_y - source_y
+        distance = (dx * dx + dy * dy) ** 0.5
+        return distance <= self.air_defense_radius
 
     @property
     def fuel_available(self) -> int:
@@ -52,8 +61,16 @@ class ResourceState:
     # -----------------------------
     # ACTIONS
     # -----------------------------
-    def consume_air_defense(self) -> bool:
+    def consume_air_defense(self,
+                        source_x: float,
+                        source_y: float,
+                        target_x: float,
+                        target_y: float) -> bool:
+
         if self.air_defense_ammo <= 0 or self.air_defense_cooldown > 0:
+            return False
+
+        if not self.in_air_defense_range(source_x, source_y, target_x, target_y):
             return False
 
         self.air_defense_ammo -= 1
