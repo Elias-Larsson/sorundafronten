@@ -27,7 +27,7 @@ class Decision:
 class DecisionEngine:
     """Deterministic rule-based planner for all final actions."""
 
-    def __init__(self, min_air_defense_reserve: int = 2, min_fighter_reserve: int = 1):
+    def __init__(self, min_air_defense_reserve: int = 2, min_fighter_reserve: int = 0):
         self.min_air_defense_reserve = min_air_defense_reserve
         self.min_fighter_reserve = min_fighter_reserve
 
@@ -82,7 +82,7 @@ class DecisionEngine:
 
         # --- RESOURCE SNAPSHOT ---
         planned_ammo = resources.air_defense_ammo
-        planned_fighters = resources.fighters_available  # ✅ NEW
+        planned_fighters = min(resources.fighters_available, resources.fuel)
         planned_drones = resources.drones_ready
 
         air_defense_ready = resources.air_defense_cooldown <= 0.0
@@ -106,7 +106,7 @@ class DecisionEngine:
             conservation_mode = (
                 future_pressure >= 0.65
                 or planned_ammo <= self.min_air_defense_reserve
-                or planned_fighters <= self.min_fighter_reserve
+                or planned_fighters < self.min_fighter_reserve
             )
 
             # =========================
@@ -141,7 +141,9 @@ class DecisionEngine:
             # =========================
             if fighter_ready and planned_fighters > 0:
 
-                if high_priority or (score >= 0.58 and not conservation_mode):
+                if high_priority or score >= 0.50 or (
+                    threat.threat_type == ThreatType.DRONE and not conservation_mode
+                ):
 
                     launch_from = self._nearest_source(
                         threat, alive_assets, ("fighter_base",)
@@ -157,8 +159,7 @@ class DecisionEngine:
                         )
                     )
 
-                    # ❗ IMPORTANT: do NOT consume fighter permanently
-                    planned_fighters -= 1   # temporary planning only
+                    planned_fighters -= 1
                     fighter_ready = False
                     continue
 
