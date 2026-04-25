@@ -141,6 +141,7 @@ class Simulation:
             self.turn_analyses = {}
             self.latest_decisions = []
             self._sync_selected_target()
+            self.resources.add_fuel(self.resources.fuel_resupply_per_turn)
             self._log(f"Turn {completed_turn} resolved. Queue threats for turn {self.turn_number}.")
 
     def spawn_manual(self, threat_type: ThreatType) -> None:
@@ -528,6 +529,8 @@ class Simulation:
                         f"Decision: Fighter scrambled for T{threat.threat_id} from {decision.launch_from}"
                         f" (score={decision.priority_score:.2f})."
                     )
+                elif self.resources.fuel <= 0:
+                    self._log("Decision blocked: No fuel available for fighter launch.")
 
             elif decision.action == DecisionAction.DEPLOY_DRONE:
                 if self.resources.launch_drone():
@@ -601,6 +604,71 @@ class Simulation:
                 )
 
             interceptor.alive = False
+
+    def _update_fighter_interceptor(self, interceptor: Interceptor, dt: float) -> None:
+        if interceptor.returning:
+            home = self._asset_by_id(interceptor.source_id)
+            if home is None or not home.is_alive():
+                interceptor.alive = False
+                self.resources.recover_fighter()
+                return
+
+            if interceptor.update_toward(home.x, home.y, dt):
+                interceptor.alive = False
+                self.resources.recover_fighter()
+                self._log(f"Fighter returned to {home.asset_id}.")
+            return
+
+        threat = self._threat_by_id(interceptor.target_threat_id)
+        if threat is None or not threat.alive:
+            next_threat = self._nearest_unassigned_threat(interceptor.x, interceptor.y)
+            if next_threat is None:
+                interceptor.returning = True
+                self._log("Fighter returning (no remaining threats).")
+                return
+
+            interceptor.target_threat_id = next_threat.threat_id
+            next_threat.assigned = True
+            threat = next_threat
+
+        reached = interceptor.update_toward(threat.x, threat.y, dt)
+        if not reached:
+            return
+
+        kill_probability = self._kill_probability(interceptor.interceptor_type, threat.threat_type)
+        if self.rng.random() <= kill_probability:
+            threat.alive = False
+            threat.assigned = False
+            self.neutralized_count += 1
+            self._log(f"Neutralized: T{threat.threat_id} by fighter (p={kill_probability:.2f}).")
+        else:
+            threat.assigned = False
+            self._log(f"Miss: fighter failed on T{threat.threat_id} (p={kill_probability:.2f}).")
+
+        interceptor.remaining_engagements -= 1
+        if interceptor.remaining_engagements <= 0:
+            interceptor.returning = True
+            self._log("Fighter returning (max engagements reached).")
+            return
+
+        if threat.alive:
+            threat.assigned = True
+            return
+
+        next_threat = self._nearest_unassigned_threat(interceptor.x, interceptor.y)
+        if next_threat is None:
+            interceptor.returning = True
+            self._log("Fighter returning (no remaining threats).")
+            return
+
+        interceptor.target_threat_id = next_threat.threat_id
+        next_threat.assigned = True
+
+    def _nearest_unassigned_threat(self, x: float, y: float) -> Threat | None:
+        candidates = [threat for threat in self.threats if threat.alive and not threat.assigned]
+        if not candidates:
+            return None
+        return min(candidates, key=lambda threat: threat.distance_to(x, y))
 
     def _kill_probability(self, interceptor_type: InterceptorType, threat_type: ThreatType) -> float:
         table = {
