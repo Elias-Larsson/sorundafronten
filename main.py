@@ -1,10 +1,18 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pygame
 
+from core.map_loader import MapProjector, load_map_data
 from core.renderer import Renderer
 from core.simulation import Simulation
 from models import ThreatType
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency in minimal setups
+    load_dotenv = None
 
 
 WIDTH = 1280
@@ -12,14 +20,26 @@ HEIGHT = 720
 
 
 def main() -> None:
+    project_root = Path(__file__).resolve().parent
+    if load_dotenv is not None:
+        load_dotenv(project_root / ".env")
+
     pygame.init()
     pygame.display.set_caption("Intelligent Air Defense Decision Support Prototype")
 
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     clock = pygame.time.Clock()
 
-    simulation = Simulation(WIDTH, HEIGHT)
-    renderer = Renderer(WIDTH, HEIGHT)
+    map_data = load_map_data(project_root / "map.csv", project_root / "map.svg")
+    projector = MapProjector(
+        map_data.world_width_km,
+        map_data.world_height_km,
+        WIDTH,
+        HEIGHT,
+    )
+
+    simulation = Simulation(WIDTH, HEIGHT, map_data=map_data, projector=projector)
+    renderer = Renderer(WIDTH, HEIGHT, map_data=map_data, projector=projector)
 
     running = True
     while running:

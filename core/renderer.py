@@ -3,20 +3,30 @@ from __future__ import annotations
 import pygame
 
 from core.decision_engine import DecisionAction
+from core.map_loader import MapData, MapProjector, load_svg_background
 from core.simulation import Simulation
 from models import InterceptorType, ThreatType
 
 
 class Renderer:
-    def __init__(self, width: int, height: int):
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        map_data: MapData | None = None,
+        projector: MapProjector | None = None,
+    ):
         self.width = width
         self.height = height
+        self.map_data = map_data
+        self.projector = projector
 
         self.title_font = pygame.font.SysFont("consolas", 22, bold=True)
         self.main_font = pygame.font.SysFont("consolas", 17)
         self.small_font = pygame.font.SysFont("consolas", 14)
 
         self.background = pygame.Surface((width, height))
+        self.map_source_label = "generated background"
         self._build_background()
 
     def draw(self, surface: pygame.Surface, simulation: Simulation) -> None:
@@ -31,6 +41,31 @@ class Renderer:
             self._draw_mission_lost(surface)
 
     def _build_background(self) -> None:
+        self.background.fill((15, 30, 46))
+
+        if self.map_data is not None and self.projector is not None:
+            map_rect = pygame.Rect(
+                int(round(self.projector.offset_x)),
+                int(round(self.projector.offset_y)),
+                int(round(self.projector.pixel_width)),
+                int(round(self.projector.pixel_height)),
+            )
+            pygame.draw.rect(self.background, (12, 22, 34), map_rect)
+
+            svg_surface = load_svg_background(self.map_data.svg_path, self.projector)
+            if svg_surface is not None:
+                self.background.blit(svg_surface, map_rect.topleft)
+                self.map_source_label = "map.svg + map.csv coordinates"
+            else:
+                self._draw_csv_terrain(self.background)
+                self.map_source_label = "map.csv terrain fallback"
+
+            pygame.draw.rect(self.background, (188, 211, 231), map_rect, 1)
+            return
+
+        self._draw_generated_background()
+
+    def _draw_generated_background(self) -> None:
         top = (10, 22, 48)
         middle = (22, 45, 74)
         bottom = (37, 72, 54)
@@ -59,6 +94,23 @@ class Renderer:
             (44, 62, 46),
             pygame.Rect(0, int(self.height * 0.86), self.width, int(self.height * 0.14)),
         )
+
+    def _draw_csv_terrain(self, surface: pygame.Surface) -> None:
+        if self.map_data is None or self.projector is None:
+            return
+
+        for terrain in self.map_data.terrains:
+            if len(terrain.points_km) < 3:
+                continue
+
+            points = self.projector.polygon_to_screen(terrain.points_km)
+            if terrain.side == "north":
+                color = (48, 78, 50)
+            else:
+                color = (88, 74, 52)
+
+            pygame.draw.polygon(surface, color, points)
+            pygame.draw.polygon(surface, (24, 32, 38), points, 1)
 
     def _draw_assets(self, surface: pygame.Surface, simulation: Simulation) -> None:
         for asset in simulation.assets:
@@ -91,7 +143,8 @@ class Renderer:
                 )
                 label = "DRV"
 
-            text = self.small_font.render(f"{asset.asset_id} ({label})", True, (240, 245, 252))
+            name = asset.display_name if asset.display_name else asset.asset_id
+            text = self.small_font.render(f"{name} ({label})", True, (240, 245, 252))
             surface.blit(text, (x - text.get_width() // 2, y + 24))
 
             ratio = 0.0 if asset.max_hp <= 0 else max(0.0, asset.hp / asset.max_hp)
@@ -133,7 +186,7 @@ class Renderer:
                 pygame.draw.circle(surface, (38, 87, 82), (x, y), 6, 1)
 
     def _draw_hud(self, surface: pygame.Surface, simulation: Simulation) -> None:
-        panel_width = 390
+        panel_width = 440
         panel = pygame.Surface((panel_width, self.height - 20), pygame.SRCALPHA)
         panel.fill((10, 18, 27, 200))
         panel_x = self.width - panel_width - 10
@@ -154,6 +207,8 @@ class Renderer:
             f"AD Ammo: {simulation.resources.air_defense_ammo}",
             f"Fighters Ready: {simulation.resources.fighters_ready}",
             f"Drones Ready: {simulation.resources.drones_ready}",
+            f"AI Source: {simulation.ai_provider_status}",
+            f"Map Source: {self.map_source_label}",
         ]
         for line in stats:
             text = self.main_font.render(line, True, (216, 232, 245))

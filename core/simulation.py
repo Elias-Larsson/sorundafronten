@@ -3,24 +3,56 @@ from __future__ import annotations
 from collections import deque
 import json
 import random
+from pathlib import Path
 from typing import Deque
 
 from ai import ThreatAnalysis, ThreatAnalyzer
 from core.decision_engine import Decision, DecisionAction, DecisionEngine
+from core.map_loader import MapData, MapProjector, load_map_data
 from models import Asset, Interceptor, InterceptorType, ResourceState, Threat, ThreatType
 
 
 class Simulation:
-    def __init__(self, width: int, height: int, seed: int = 7):
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        seed: int = 7,
+        map_data: MapData | None = None,
+        projector: MapProjector | None = None,
+    ):
         self.width = width
         self.height = height
 
         self.rng = random.Random(seed)
 
+        self.map_data = map_data
+        if self.map_data is None:
+            root = Path(__file__).resolve().parent.parent
+            csv_path = root / "map.csv"
+            svg_path = root / "map.svg"
+            if csv_path.exists() and svg_path.exists():
+                self.map_data = load_map_data(csv_path, svg_path)
+
+        if projector is None:
+            if self.map_data is not None:
+                self.projector = MapProjector(
+                    self.map_data.world_width_km,
+                    self.map_data.world_height_km,
+                    width,
+                    height,
+                )
+            else:
+                self.projector = MapProjector(1666.7, 1300.0, width, height)
+        else:
+            self.projector = projector
+
         self.assets = self._build_assets()
+        self.enemy_launch_points = self._build_enemy_launch_points()
         self.resources = ResourceState()
 
         self.analyzer = ThreatAnalyzer()
+        self.ai_provider_status = self.analyzer.provider_status
         self.decision_engine = DecisionEngine()
 
         self.threats: list[Threat] = []
@@ -73,6 +105,53 @@ class Simulation:
         return not any(asset.kind == "base" and asset.is_alive() for asset in self.assets)
 
     def _build_assets(self) -> list[Asset]:
+        if self.map_data is not None:
+            by_name = {location.feature_name: location for location in self.map_data.locations}
+
+            def from_location(
+                asset_id: str,
+                kind: str,
+                location_name: str,
+                hp: int,
+                strategic_value: float,
+            ) -> Asset | None:
+                location = by_name.get(location_name)
+                if location is None:
+                    return None
+
+                x_px, y_px = self.projector.to_screen(location.x_km, location.y_km)
+                return Asset(
+                    asset_id=asset_id,
+                    kind=kind,
+                    x=x_px,
+                    y=y_px,
+                    hp=hp,
+                    max_hp=hp,
+                    strategic_value=strategic_value,
+                    side=location.side,
+                    display_name=location.feature_name,
+                )
+
+            assets: list[Asset] = []
+            candidates = [
+                from_location("base_hq", "base", "Arktholm (Capital X)", 230, 1.0),
+                from_location("ad_alpha", "air_defense", "Highridge Command", 140, 0.84),
+                from_location(
+                    "fighter_charlie",
+                    "fighter_base",
+                    "Northern Vanguard Base",
+                    155,
+                    0.86,
+                ),
+                from_location("drone_delta", "drone_hub", "Boreal Watch Post", 120, 0.63),
+                from_location("city_nordvik", "city", "Nordvik", 100, 0.72),
+                from_location("city_valbrek", "city", "Valbrek", 100, 0.74),
+            ]
+            assets.extend([asset for asset in candidates if asset is not None])
+
+            if assets:
+                return assets
+
         return [
             Asset(
                 asset_id="base_hq",
@@ -82,6 +161,8 @@ class Simulation:
                 hp=220,
                 max_hp=220,
                 strategic_value=1.0,
+                side="north",
+                display_name="HQ",
             ),
             Asset(
                 asset_id="ad_alpha",
@@ -91,6 +172,8 @@ class Simulation:
                 hp=130,
                 max_hp=130,
                 strategic_value=0.82,
+                side="north",
+                display_name="AD Alpha",
             ),
             Asset(
                 asset_id="fighter_charlie",
@@ -100,6 +183,8 @@ class Simulation:
                 hp=150,
                 max_hp=150,
                 strategic_value=0.86,
+                side="north",
+                display_name="Fighter Charlie",
             ),
             Asset(
                 asset_id="drone_delta",
@@ -109,8 +194,21 @@ class Simulation:
                 hp=110,
                 max_hp=110,
                 strategic_value=0.60,
+                side="north",
+                display_name="Drone Delta",
             ),
         ]
+
+    def _build_enemy_launch_points(self) -> list[tuple[float, float]]:
+        if self.map_data is None:
+            return []
+
+        points: list[tuple[float, float]] = []
+        for location in self.map_data.locations:
+            if location.side == "south" and location.subtype == "air_base":
+                points.append(self.projector.to_screen(location.x_km, location.y_km))
+
+        return points
 
     def _spawn_logic(self, dt: float) -> None:
         interval = max(1.0, self.base_spawn_interval - min(0.9, self.time_elapsed / 120.0))
@@ -127,16 +225,29 @@ class Simulation:
             self._spawn_threat(ThreatType.MISSILE if self.rng.random() < 0.35 else ThreatType.DRONE)
 
     def _spawn_threat(self, threat_type: ThreatType, spawn_x: float | None = None) -> None:
-        alive_assets = [asset for asset in self.assets if asset.is_alive()]
-        if not alive_assets:
+        defended_assets = [
+            asset for asset in self.assets if asset.is_alive() and (asset.side == "north" or not asset.side)
+        ]
+        if not defended_assets:
+            defended_assets = [asset for asset in self.assets if asset.is_alive()]
+
+        if not defended_assets:
             return
 
-        x = float(spawn_x if spawn_x is not None else self.rng.uniform(35, self.width - 35))
-        y = -20.0
+        if spawn_x is not None:
+            x = float(spawn_x)
+            y = self.height + 24.0
+        elif self.enemy_launch_points:
+            base_x, base_y = self.rng.choice(self.enemy_launch_points)
+            x = base_x + self.rng.uniform(-22.0, 22.0)
+            y = base_y + self.rng.uniform(-12.0, 12.0)
+        else:
+            x = float(self.rng.uniform(35, self.width - 35))
+            y = self.height + 24.0
 
         target = self.rng.choices(
-            alive_assets,
-            weights=[asset.strategic_value for asset in alive_assets],
+            defended_assets,
+            weights=[asset.strategic_value for asset in defended_assets],
             k=1,
         )[0]
 
@@ -167,7 +278,12 @@ class Simulation:
 
             threat.update(dt)
 
-            if threat.y > self.height + 60:
+            if (
+                threat.x < -80
+                or threat.x > self.width + 80
+                or threat.y < -80
+                or threat.y > self.height + 80
+            ):
                 threat.alive = False
                 threat.assigned = False
                 self.impact_count += 1
@@ -191,10 +307,9 @@ class Simulation:
                     self._log(f"Impact: T{threat.threat_id} hit {target.asset_id} (-{damage} HP).")
 
     def _analyze_active_threats(self) -> dict[int, ThreatAnalysis]:
-        analyses: dict[int, ThreatAnalysis] = {}
-        for threat in self.threats:
-            if threat.alive:
-                analyses[threat.threat_id] = self.analyzer.analyze(threat, self.assets)
+        active_threats = [threat for threat in self.threats if threat.alive]
+        analyses = self.analyzer.analyze_all(active_threats, self.assets)
+        self.ai_provider_status = self.analyzer.provider_status
         return analyses
 
     def _execute_decisions(self, decisions: list[Decision]) -> None:

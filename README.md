@@ -24,12 +24,15 @@ core/
 	decision_engine.py     # Deterministic rule-based final decision logic
 	simulation.py          # Simulation state, spawning, updates, engagements
 	renderer.py            # Pygame drawing and HUD
+	map_loader.py          # map.csv/map.svg loading and coordinate projection
 models/
 	threat.py              # Threat objects
 	resource.py            # Ammo/readiness/cooldown/recovery
 	asset.py               # Defended assets
 	interceptor.py         # Interceptor objects
 main.py                  # Pygame application loop
+map.csv                  # Canonical terrain and location coordinates
+map.svg                  # Visual map source + viewBox coordinate frame
 ```
 
 ## Run
@@ -54,6 +57,23 @@ python -m pip install -r requirements.txt
 python main.py
 ```
 
+## Gemini API setup (`.env`)
+
+The app now loads `.env` automatically at startup.
+
+Create `.env` in the project root:
+
+```bash
+GEMINI_API=your_api_key_here
+```
+
+Supported key styles:
+
+- Google Gemini REST API key
+- OpenRouter key (`sk-or-v1-...`) targeting Gemini model
+
+If `GEMINI_API` is missing or unreachable, the app falls back to local heuristic analysis.
+
 ## Controls
 
 - `M`: spawn missile
@@ -68,6 +88,8 @@ python main.py
 - AI never issues actions and never controls resources.
 - AI output is structured and visible as JSON in the HUD.
 - Decision engine is deterministic, explainable, and rule-based.
+- `map.csv` provides operational coordinates for terrain, assets, and launch positions.
+- `map.svg` is used as visual map background and coordinate calibration source.
 - Resource use accounts for:
   - ammo limits
   - launch cooldowns
