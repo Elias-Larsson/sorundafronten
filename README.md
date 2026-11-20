@@ -3,7 +3,7 @@
 
 **An experimental 2D airbase engagement simulation built with Python and Pygame.**
 
-Sorundafronten is a small simulation prototype exploring moving entities, automated target selection, projectile interception, and simple combat logic on a map loaded from CSV data. The project was created as a programming experiment rather than a finished game or a real-world defense system. This project was for a hackathon competition at KTH with saab.
+Sorundafronten is a small simulation prototype exploring moving entities, automated target selection, projectile interception, and simple combat logic on a map loaded from CSV data. The project was created for a hackathon at KTH in collaboration with Saab.
 
 ## What It Does
 
